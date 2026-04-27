@@ -1,0 +1,85 @@
+apiVersion: v2
+name: nitte-merch-shop
+description: Helm chart for NITTE Merchandise Shop
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+keywords:
+  - merchandise
+  - shop
+  - microservices
+  - kubernetes
+
+maintainers:
+  - name: NITTE Dev Team
+    email: dev@nitte.com
+
+dependencies: []
+
+values:
+  replicaCount: 2
+
+  nodeBackend:
+    image: nitte-merch-shop/node-backend
+    tag: latest
+    port: 3000
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  pythonService:
+    image: nitte-merch-shop/python-service
+    tag: latest
+    port: 8000
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  mongodb:
+    enabled: true
+    image: mongo
+    tag: "7.0-alpine"
+    port: 27017
+    storage: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: api.nitte-merch-shop.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: nitte-merch-tls
+        hosts:
+          - api.nitte-merch-shop.com
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+  secrets:
+    jwtSecret: "your-super-secret-jwt-key"
+    mongodbUsername: admin
+    mongodbPassword: "changeme"

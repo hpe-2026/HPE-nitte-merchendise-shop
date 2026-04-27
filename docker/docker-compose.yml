@@ -1,0 +1,184 @@
+version: '3.9'
+
+services:
+  # Jaeger - Distributed Tracing (v2.16.0 - latest based on OpenTelemetry Collector)
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
+    container_name: nitte-jaeger
+    environment:
+      # Storage backend (in-memory for demos)
+      SPAN_STORAGE_TYPE: memory
+      # OTLP receiver configuration
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
+    ports:
+      # Thrift protocol (used by jaeger-client library and legacy clients)
+      - "6831:6831/udp"   # Jaeger agent Thrift compact
+      - "6832:6832/udp"   # Jaeger agent Thrift binary
+      - "5778:5778"       # Jaeger agent HTTP
+      # Collector (HTTP and gRPC)
+      - "14268:14268"  # Jaeger collector HTTP (Thrift)
+      - "14250:14250"  # Jaeger collector gRPC (OTLP)
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+      # UI and Metrics
+      - "16686:16686"  # Jaeger UI
+      - "14269:14269"  # Prometheus metrics endpoint
+      - "9411:9411"    # Zipkin compatible endpoint
+    networks:
+      - nitte-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:16686/api/services"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: nitte-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: nitte_merch_shop
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+      - ../database/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - nitte-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Python FastAPI Service
+  python-service:
+    build:
+      context: ../python-service
+      dockerfile: Dockerfile
+    container_name: nitte-python-service
+    environment:
+      ENVIRONMENT: development
+      PORT: 8000
+      MONGODB_URL: mongodb://admin:password@mongodb:27017/nitte_merch_shop?authSource=admin
+      DATABASE_NAME: nitte_merch_shop
+      LOG_LEVEL: info
+      API_GATEWAY_URL: http://node-backend:3000
+      JAEGER_AGENT_HOST: nitte-jaeger
+      JAEGER_AGENT_PORT: 6831
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongodb
+      - jaeger
+    networks:
+      - nitte-network
+    volumes:
+      - ../python-service:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Node.js API Gateway
+  node-backend:
+    build:
+      context: ../node-backend
+      dockerfile: Dockerfile
+    container_name: nitte-node-backend
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      PYTHON_SERVICE_URL: http://python-service:8000
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRY: 7d
+      MONGODB_URL: mongodb://admin:password@mongodb:27017/nitte_merch_shop?authSource=admin
+      LOG_LEVEL: info
+      CORS_ORIGIN: http://localhost:3000
+      REQUEST_TIMEOUT: 30000
+      JAEGER_AGENT_HOST: nitte-jaeger
+      JAEGER_AGENT_PORT: 6831
+    ports:
+      - "3000:3000"
+    depends_on:
+      - python-service
+      - mongodb
+      - jaeger
+    networks:
+      - nitte-network
+    volumes:
+      - ../node-backend:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # React Frontend - User Application
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: nitte-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:3000
+    depends_on:
+      - node-backend
+    networks:
+      - nitte-network
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # React Admin Dashboard - Metrics and Monitoring
+  admin-dashboard:
+    build:
+      context: ../admin-dashboard
+      dockerfile: Dockerfile
+    container_name: nitte-admin-dashboard
+    ports:
+      - "5174:5174"
+    environment:
+      VITE_API_URL: http://localhost:3000
+      VITE_PROMETHEUS_URL: http://localhost:9090
+      VITE_JAEGER_URL: http://localhost:16686
+      VITE_GRAFANA_URL: http://localhost:3001
+    depends_on:
+      - node-backend
+    networks:
+      - nitte-network
+    volumes:
+      - ../admin-dashboard:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5174"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+
+networks:
+  nitte-network:
+    driver: bridge

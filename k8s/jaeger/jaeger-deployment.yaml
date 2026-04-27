@@ -1,0 +1,160 @@
+---
+# PersistentVolumeClaim for Jaeger
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaeger-pvc
+  namespace: nitte-merch
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# Jaeger Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: nitte-merch
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:latest
+        ports:
+        - name: jaeger-agent-zipkin-thrift
+          containerPort: 6831
+          protocol: UDP
+        - name: jaeger-agent-compact
+          containerPort: 6832
+          protocol: UDP
+        - name: jaeger-agent-binary
+          containerPort: 6833
+          protocol: UDP
+        - name: jaeger-agent-serve-configs
+          containerPort: 5778
+          protocol: TCP
+        - name: jaeger-collector
+          containerPort: 14269
+          protocol: TCP
+        - name: jaeger-ui
+          containerPort: 16686
+          protocol: TCP
+        env:
+        - name: COLLECTOR_OTLP_ENABLED
+          value: "true"
+        - name: COLLECTOR_ZIPKIN_HOST_PORT
+          value: ":9411"
+        - name: MEMORY_MAX_TRACES
+          value: "5000"
+        - name: SPAN_STORAGE_TYPE
+          value: "badger"
+        - name: BADGER_EPHEMERAL
+          value: "false"
+        - name: BADGER_DIRECTORY_VALUE
+          value: "/badger/data"
+        - name: BADGER_DIRECTORY_KEY
+          value: "/badger/key"
+        volumeMounts:
+        - name: jaeger-storage
+          mountPath: /badger
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: jaeger-ui
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: jaeger-ui
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: jaeger-storage
+        persistentVolumeClaim:
+          claimName: jaeger-pvc
+
+---
+# Jaeger Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: nitte-merch
+  labels:
+    app: jaeger
+spec:
+  type: ClusterIP
+  ports:
+  - name: jaeger-agent-zipkin-thrift
+    port: 6831
+    protocol: UDP
+    targetPort: jaeger-agent-zipkin-thrift
+  - name: jaeger-agent-compact
+    port: 6832
+    protocol: UDP
+    targetPort: jaeger-agent-compact
+  - name: jaeger-agent-binary
+    port: 6833
+    protocol: UDP
+    targetPort: jaeger-agent-binary
+  - name: jaeger-agent-serve-configs
+    port: 5778
+    protocol: TCP
+    targetPort: jaeger-agent-serve-configs
+  - name: jaeger-collector
+    port: 14269
+    protocol: TCP
+    targetPort: jaeger-collector
+  - name: jaeger-ui
+    port: 16686
+    protocol: TCP
+    targetPort: jaeger-ui
+  - name: jaeger-zipkin
+    port: 9411
+    protocol: TCP
+    targetPort: 9411
+  selector:
+    app: jaeger
+
+---
+# Jaeger Service for UI exposure (optional NodePort)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-ui
+  namespace: nitte-merch
+  labels:
+    app: jaeger
+spec:
+  type: NodePort
+  ports:
+  - name: jaeger-ui
+    port: 16686
+    protocol: TCP
+    targetPort: jaeger-ui
+    nodePort: 30686
+  selector:
+    app: jaeger

@@ -1,0 +1,113 @@
+replicaCount: 2
+
+nodeBackend:
+  name: node-backend
+  image:
+    repository: nitte-merch-shop/node-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  port: 3000
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    NODE_ENV: production
+    JWT_EXPIRY: 7d
+    LOG_LEVEL: info
+
+pythonService:
+  name: python-service
+  image:
+    repository: nitte-merch-shop/python-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  port: 8000
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    ENVIRONMENT: production
+    LOG_LEVEL: info
+
+mongodb:
+  enabled: true
+  name: mongodb
+  image:
+    repository: mongo
+    tag: "7.0-alpine"
+  port: 27017
+  storage:
+    size: 10Gi
+    className: standard
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  env:
+    MONGO_INITDB_DATABASE: nitte_merch_shop
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+  hosts:
+    - host: api.nitte-merch-shop.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: nitte-merch-tls
+      hosts:
+        - api.nitte-merch-shop.com
+
+autoscaling:
+  nodeBackend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+  pythonService:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+secrets:
+  jwtSecret: "your-super-secret-jwt-key-change-in-production"
+  mongodbUsername: admin
+  mongodbPassword: "changeme-in-production"
+
+namespace: nitte-merch
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+
+monitoring:
+  enabled: false
+  prometheus:
+    enabled: false
+  grafana:
+    enabled: false

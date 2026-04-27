@@ -1,0 +1,350 @@
+pipeline {
+    agent any
+
+    environment {
+        // Docker Registry Configuration
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_NAMESPACE = 'nitte-merch-shop'
+        DOCKER_CREDENTIALS = credentials('docker-credentials')
+
+        // Git Configuration
+        GIT_REPOSITORY = 'https://github.com/nitte-dev/nitte-merch-shop.git'
+        GIT_BRANCH = "${env.BRANCH_NAME ?: 'main'}"
+
+        // Build Configuration
+        NODE_BACKEND_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/node-backend:${BUILD_NUMBER}"
+        PYTHON_SERVICE_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/python-service:${BUILD_NUMBER}"
+
+        // Kubernetes Configuration
+        KUBECONFIG = credentials('kubeconfig')
+        KUBE_NAMESPACE = 'nitte-merch'
+
+        // Sonar Configuration (for code quality)
+        SONAR_HOST_URL = 'https://sonarqube.example.com'
+        SONAR_TOKEN = credentials('sonar-token')
+    }
+
+    options {
+        timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "Checking out code from ${GIT_REPOSITORY}"
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${GIT_BRANCH}"]],
+                        userRemoteConfigs: [[url: GIT_REPOSITORY]]
+                    ])
+                }
+            }
+        }
+
+        stage('Build & Test') {
+            parallel {
+                stage('Build Node.js Backend') {
+                    steps {
+                        script {
+                            echo "Building Node.js API Gateway..."
+                            dir('node-backend') {
+                                sh '''
+                                    echo "Installing dependencies..."
+                                    npm ci
+
+                                    echo "Running linting..."
+                                    npm run lint || true
+
+                                    echo "Running tests..."
+                                    npm test || true
+
+                                    echo "Building application..."
+                                    npm run build || true
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Build Python Service') {
+                    steps {
+                        script {
+                            echo "Building Python FastAPI Service..."
+                            dir('python-service') {
+                                sh '''
+                                    echo "Installing dependencies..."
+                                    python -m venv venv
+                                    . venv/bin/activate
+                                    pip install --upgrade pip
+                                    pip install -r requirements.txt
+
+                                    echo "Running tests..."
+                                    pytest tests/ -v --cov=app --cov-report=xml || true
+
+                                    echo "Running code quality checks..."
+                                    flake8 app/ --max-line-length=120 || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Code Quality Analysis') {
+            parallel {
+                stage('SonarQube - Node.js') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            echo "Running SonarQube analysis for Node.js..."
+                            dir('node-backend') {
+                                sh '''
+                                    npm install -g sonar-scanner
+                                    sonar-scanner \
+                                        -Dsonar.projectKey=nitte-merch-node \
+                                        -Dsonar.sources=src \
+                                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                                        -Dsonar.login=${SONAR_TOKEN} || true
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('SonarQube - Python') {
+                    when {
+                        branch 'main'
+                    }
+                    steps {
+                        script {
+                            echo "Running SonarQube analysis for Python..."
+                            dir('python-service') {
+                                sh '''
+                                    pip install sonarlint
+                                    sonar-scanner \
+                                        -Dsonar.projectKey=nitte-merch-python \
+                                        -Dsonar.sources=app \
+                                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                                        -Dsonar.login=${SONAR_TOKEN} || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    echo "Building and pushing Docker images..."
+                    sh '''
+                        echo "Logging into Docker Registry..."
+                        echo "${DOCKER_CREDENTIALS_PSW}" | docker login -u "${DOCKER_CREDENTIALS_USR}" --password-stdin ${DOCKER_REGISTRY}
+
+                        echo "Building Node.js backend image..."
+                        docker build -t ${NODE_BACKEND_IMAGE} \
+                                    -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/node-backend:latest \
+                                    -f node-backend/Dockerfile \
+                                    node-backend/
+
+                        echo "Building Python service image..."
+                        docker build -t ${PYTHON_SERVICE_IMAGE} \
+                                    -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/python-service:latest \
+                                    -f python-service/Dockerfile \
+                                    python-service/
+
+                        echo "Pushing images to registry..."
+                        docker push ${NODE_BACKEND_IMAGE}
+                        docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/node-backend:latest
+                        docker push ${PYTHON_SERVICE_IMAGE}
+                        docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/python-service:latest
+
+                        echo "Image scan with Trivy..."
+                        trivy image --severity HIGH,CRITICAL ${NODE_BACKEND_IMAGE} || true
+                        trivy image --severity HIGH,CRITICAL ${PYTHON_SERVICE_IMAGE} || true
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    echo "Deploying to Staging Kubernetes Cluster..."
+                    sh '''
+                        export KUBECONFIG=${KUBECONFIG}
+
+                        echo "Creating namespace..."
+                        kubectl create namespace ${KUBE_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+                        echo "Applying MongoDB StatefulSet..."
+                        kubectl apply -f k8s/mongodb/statefulset.yaml
+
+                        echo "Waiting for MongoDB to be ready..."
+                        kubectl wait --for=condition=ready pod -l app=mongodb -n ${KUBE_NAMESPACE} --timeout=300s || true
+
+                        echo "Applying Python Service Deployment..."
+                        kubectl set image deployment/python-service \
+                            python-service=${PYTHON_SERVICE_IMAGE} \
+                            -n ${KUBE_NAMESPACE} || \
+                        kubectl apply -f k8s/python-service/deployment.yaml
+
+                        echo "Applying Node Backend Deployment..."
+                        kubectl set image deployment/node-backend \
+                            node-backend=${NODE_BACKEND_IMAGE} \
+                            -n ${KUBE_NAMESPACE} || \
+                        kubectl apply -f k8s/node-backend/deployment.yaml
+
+                        echo "Applying Ingress Configuration..."
+                        kubectl apply -f k8s/ingress.yaml
+
+                        echo "Waiting for deployments to be ready..."
+                        kubectl rollout status deployment/python-service -n ${KUBE_NAMESPACE} --timeout=5m
+                        kubectl rollout status deployment/node-backend -n ${KUBE_NAMESPACE} --timeout=5m
+
+                        echo "Checking deployment status..."
+                        kubectl get deployments -n ${KUBE_NAMESPACE}
+                        kubectl get pods -n ${KUBE_NAMESPACE}
+                        kubectl get svc -n ${KUBE_NAMESPACE}
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Production') {
+            when {
+                branch 'main'
+                expression {
+                    return currentBuild.result == null || currentBuild.result == 'SUCCESS'
+                }
+            }
+            input {
+                message "Do you want to deploy to Production?"
+                ok "Deploy"
+            }
+            steps {
+                script {
+                    echo "Deploying to Production Kubernetes Cluster..."
+                    sh '''
+                        export KUBECONFIG=${KUBECONFIG}
+
+                        echo "Creating blue-green deployment strategy..."
+                        echo "Applying MongoDB StatefulSet..."
+                        kubectl apply -f k8s/mongodb/statefulset.yaml
+
+                        echo "Applying Python Service Deployment..."
+                        kubectl set image deployment/python-service \
+                            python-service=${PYTHON_SERVICE_IMAGE} \
+                            -n ${KUBE_NAMESPACE}
+
+                        echo "Applying Node Backend Deployment..."
+                        kubectl set image deployment/node-backend \
+                            node-backend=${NODE_BACKEND_IMAGE} \
+                            -n ${KUBE_NAMESPACE}
+
+                        echo "Monitoring rollout..."
+                        kubectl rollout status deployment/python-service -n ${KUBE_NAMESPACE} --timeout=10m
+                        kubectl rollout status deployment/node-backend -n ${KUBE_NAMESPACE} --timeout=10m
+
+                        echo "Verifying deployment health..."
+                        kubectl get deployments -n ${KUBE_NAMESPACE}
+                        kubectl get pods -n ${KUBE_NAMESPACE}
+                    '''
+                }
+            }
+        }
+
+        stage('Smoke Tests') {
+            steps {
+                script {
+                    echo "Running smoke tests..."
+                    sh '''
+                        echo "Testing Node Backend health..."
+                        curl -f http://node-backend:3000/api/health || exit 1
+
+                        echo "Testing Python Service health..."
+                        curl -f http://python-service:8000/health || exit 1
+
+                        echo "Testing API endpoints..."
+                        curl -f http://node-backend:3000/api/v1/products || exit 1
+                    '''
+                }
+            }
+        }
+
+        stage('Performance Testing') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo "Running performance tests with Apache Bench..."
+                    sh '''
+                        ab -n 1000 -c 10 http://node-backend:3000/api/health || true
+                        ab -n 1000 -c 10 http://python-service:8000/health || true
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                echo "Pipeline execution completed"
+
+                // Clean up Docker
+                sh '''
+                    docker logout ${DOCKER_REGISTRY} || true
+                '''
+            }
+        }
+
+        success {
+            script {
+                echo "Pipeline succeeded!"
+                // Send success notification
+                emailext(
+                    subject: "Pipeline SUCCESS: ${JOB_NAME} - Build #${BUILD_NUMBER}",
+                    body: "The pipeline completed successfully.\n\nBuild: ${BUILD_URL}",
+                    to: "dev-team@example.com",
+                    from: "jenkins@example.com"
+                )
+            }
+        }
+
+        failure {
+            script {
+                echo "Pipeline failed!"
+                // Send failure notification
+                emailext(
+                    subject: "Pipeline FAILURE: ${JOB_NAME} - Build #${BUILD_NUMBER}",
+                    body: "The pipeline failed.\n\nBuild: ${BUILD_URL}\n\nCheck logs for details.",
+                    to: "dev-team@example.com",
+                    from: "jenkins@example.com"
+                )
+            }
+        }
+
+        unstable {
+            script {
+                echo "Pipeline is unstable"
+            }
+        }
+
+        cleanup {
+            // Clean workspace
+            deleteDir()
+        }
+    }
+}

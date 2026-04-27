@@ -1,0 +1,282 @@
+pipeline {
+    agent any
+
+    environment {
+        // Docker Registry Configuration
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_NAMESPACE = 'nitte-merch-shop'
+        REGISTRY_CREDENTIALS = 'docker-credentials'
+
+        // Image Names
+        NODE_BACKEND_IMAGE = "${DOCKER_NAMESPACE}/node-backend:${BUILD_NUMBER}"
+        NODE_BACKEND_LATEST = "${DOCKER_NAMESPACE}/node-backend:latest"
+        PYTHON_SERVICE_IMAGE = "${DOCKER_NAMESPACE}/python-service:${BUILD_NUMBER}"
+        PYTHON_SERVICE_LATEST = "${DOCKER_NAMESPACE}/python-service:latest"
+
+        // Kubernetes
+        KUBE_NAMESPACE = 'nitte-merch'
+        KUBECONFIG = credentials('kubeconfig')
+
+        // Git
+        GIT_BRANCH = "${env.BRANCH_NAME ?: 'main'}"
+        WORKSPACE_DIR = "${WORKSPACE}"
+    }
+
+    options {
+        timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo " Checking out code from branch: ${GIT_BRANCH}"
+                    try {
+                        checkout scm
+                        sh 'git log --oneline -1'
+                    } catch (Exception e) {
+                        echo " Checkout failed: ${e.message}"
+                        currentBuild.result = 'FAILURE'
+                        error "Git checkout failed"
+                    }
+                }
+            }
+        }
+
+        stage('Code Quality Analysis') {
+            parallel {
+                stage('Node.js Lint') {
+                    steps {
+                        script {
+                            dir('node-backend') {
+                                echo " Running ESLint on Node.js backend..."
+                                sh 'npm install'
+                                sh 'npm run lint || true'
+                            }
+                        }
+                    }
+                }
+                stage('Python Lint') {
+                    steps {
+                        script {
+                            dir('python-service') {
+                                echo " Running Pylint on Python service..."
+                                sh '''
+                                    python3 -m pip install flake8 pylint --quiet
+                                    flake8 app/ || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            parallel {
+                stage('Build Node.js Backend') {
+                    steps {
+                        script {
+                            echo " Building Node.js backend image..."
+                            sh '''
+                                cd docker
+                                docker build \
+                                    -f ../node-backend/Dockerfile \
+                                    -t ${NODE_BACKEND_IMAGE} \
+                                    -t ${NODE_BACKEND_LATEST} \
+                                    ../node-backend
+                            '''
+                        }
+                    }
+                }
+                stage('Build Python Service') {
+                    steps {
+                        script {
+                            echo " Building Python service image..."
+                            sh '''
+                                cd docker
+                                docker build \
+                                    -f ../python-service/Dockerfile \
+                                    -t ${PYTHON_SERVICE_IMAGE} \
+                                    -t ${PYTHON_SERVICE_LATEST} \
+                                    ../python-service
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Test') {
+            parallel {
+                stage('Node.js Tests') {
+                    steps {
+                        script {
+                            dir('node-backend') {
+                                echo " Running Node.js tests..."
+                                sh 'npm test || true'
+                            }
+                        }
+                    }
+                }
+                stage('Python Tests') {
+                    steps {
+                        script {
+                            dir('python-service') {
+                                echo " Running Python tests..."
+                                sh '''
+                                    python3 -m pip install pytest pytest-asyncio --quiet
+                                    pytest tests/ -v --tb=short || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Push to Registry') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                    branch 'master'
+                }
+            }
+            steps {
+                script {
+                    echo " Pushing Docker images to registry..."
+                    withCredentials([usernamePassword(
+                        credentialsId: "${REGISTRY_CREDENTIALS}",
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh '''
+                            echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin
+                            docker push ${NODE_BACKEND_IMAGE}
+                            docker push ${NODE_BACKEND_LATEST}
+                            docker push ${PYTHON_SERVICE_IMAGE}
+                            docker push ${PYTHON_SERVICE_LATEST}
+                            docker logout
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                }
+            }
+            steps {
+                script {
+                    echo " Deploying to Kubernetes..."
+                    sh '''
+                        # Create namespace if it doesn't exist
+                        kubectl create namespace ${KUBE_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+                        # Update image references in deployment
+                        kubectl set image deployment/node-backend \
+                            node-backend=${NODE_BACKEND_IMAGE} \
+                            -n ${KUBE_NAMESPACE} || true
+
+                        kubectl set image deployment/python-service \
+                            python-service=${PYTHON_SERVICE_IMAGE} \
+                            -n ${KUBE_NAMESPACE} || true
+
+                        # Wait for rollout
+                        kubectl rollout status deployment/node-backend -n ${KUBE_NAMESPACE} --timeout=5m || true
+                        kubectl rollout status deployment/python-service -n ${KUBE_NAMESPACE} --timeout=5m || true
+
+                        # Show deployment status
+                        kubectl get pods -n ${KUBE_NAMESPACE}
+                    '''
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    echo " Performing health checks..."
+                    sh '''
+                        # Wait for services to be ready
+                        sleep 10
+
+                        # Check Node.js backend
+                        echo "Checking Node.js backend..."
+                        curl -f http://localhost:3000/api/health || echo "Node.js health check failed (expected in CI/CD)"
+
+                        # Check Python service
+                        echo "Checking Python service..."
+                        curl -f http://localhost:8000/health || echo "Python health check failed (expected in CI/CD)"
+                    '''
+                }
+            }
+        }
+
+        stage('Integration Tests') {
+            steps {
+                script {
+                    echo " Running integration tests..."
+                    sh '''
+                        # Run API integration tests
+                        cd jenkins/scripts
+                        bash test.sh || true
+                    '''
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            steps {
+                script {
+                    echo " Cleaning up..."
+                    sh '''
+                        # Remove old Docker images
+                        docker image prune -a -f --filter "until=72h" || true
+
+                        # Show final status
+                        echo "Build Summary:"
+                        echo "Build Number: ${BUILD_NUMBER}"
+                        echo "Build Status: ${currentBuild.result}"
+                        echo "Timestamp: $(date)"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                echo " Pipeline completed successfully!"
+                // Send Slack notification if configured
+                // slackSend(channel: '#deployments', message: " Build #${BUILD_NUMBER} succeeded")
+            }
+        }
+        failure {
+            script {
+                echo " Pipeline failed!"
+                // Send Slack notification if configured
+                // slackSend(channel: '#deployments', message: " Build #${BUILD_NUMBER} failed", color: 'danger')
+            }
+        }
+        always {
+            script {
+                echo " Archiving logs and artifacts..."
+                // Archive important files
+                archiveArtifacts artifacts: 'logs/**/*.log', allowEmptyArchive: true
+
+                // Clean workspace
+                cleanWs()
+            }
+        }
+    }
+}

@@ -1,0 +1,419 @@
+---
+# ConfigMap for environment variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: nitte-merch
+data:
+  ENVIRONMENT: production
+  LOG_LEVEL: info
+  DATABASE_NAME: nitte_merch_shop
+  API_GATEWAY_URL: http://node-backend:3000
+  PYTHON_SERVICE_URL: http://python-service:8000
+  JAEGER_AGENT_HOST: jaeger
+  JAEGER_AGENT_PORT: "6831"
+  JAEGER_SAMPLER_TYPE: const
+  JAEGER_SAMPLER_PARAM: "1"
+
+---
+# Secret for sensitive data
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: nitte-merch
+type: Opaque
+stringData:
+  MONGODB_URL: mongodb://admin:password@mongodb:27017/nitte_merch_shop?authSource=admin
+  JWT_SECRET: your-super-secret-jwt-key-change-in-production
+
+---
+# MongoDB StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: nitte-merch
+spec:
+  serviceName: mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: mongo:7.0
+        ports:
+        - containerPort: 27017
+          name: mongodb
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: admin
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_PASSWORD
+        volumeMounts:
+        - name: mongodb-storage
+          mountPath: /data/db
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - mongosh
+            - --eval
+            - db.adminCommand('ping')
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      terminationGracePeriodSeconds: 10
+  volumeClaimTemplates:
+  - metadata:
+      name: mongodb-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 5Gi
+
+---
+# MongoDB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: nitte-merch
+spec:
+  clusterIP: None
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+    name: mongodb
+
+---
+# Python FastAPI Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-service
+  namespace: nitte-merch
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: python-service
+  template:
+    metadata:
+      labels:
+        app: python-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: python-service
+        image: docker-python-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: ENVIRONMENT
+        - name: PORT
+          value: "8000"
+        - name: MONGODB_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_URL
+        - name: DATABASE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: DATABASE_NAME
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: LOG_LEVEL
+        - name: API_GATEWAY_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: API_GATEWAY_URL
+        - name: JAEGER_AGENT_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: JAEGER_AGENT_HOST
+        - name: JAEGER_AGENT_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: JAEGER_AGENT_PORT
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+
+---
+# Python Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-service
+  namespace: nitte-merch
+  labels:
+    app: python-service
+spec:
+  type: ClusterIP
+  selector:
+    app: python-service
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+
+---
+# Node.js API Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-backend
+  namespace: nitte-merch
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: node-backend
+  template:
+    metadata:
+      labels:
+        app: node-backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: node-backend
+        image: docker-node-backend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "3000"
+        - name: PYTHON_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: PYTHON_SERVICE_URL
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: JWT_SECRET
+        - name: JWT_EXPIRY
+          value: "7d"
+        - name: MONGODB_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_URL
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: LOG_LEVEL
+        - name: CORS_ORIGIN
+          value: "*"
+        - name: REQUEST_TIMEOUT
+          value: "30000"
+        - name: JAEGER_AGENT_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: JAEGER_AGENT_HOST
+        - name: JAEGER_AGENT_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: JAEGER_AGENT_PORT
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+
+---
+# Node.js Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-backend
+  namespace: nitte-merch
+  labels:
+    app: node-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: node-backend
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nitte-ingress
+  namespace: nitte-merch
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  rules:
+  - host: api.nitte-merch.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: node-backend
+            port:
+              number: 3000
+  - host: python.nitte-merch.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: python-service
+            port:
+              number: 8000
+
+---
+# HorizontalPodAutoscaler for Python Service
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: python-service-hpa
+  namespace: nitte-merch
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: python-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# HorizontalPodAutoscaler for Node Backend
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: node-backend-hpa
+  namespace: nitte-merch
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: node-backend
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

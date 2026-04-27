@@ -1,0 +1,33 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'nitte-merchandise-shop'
+
+scrape_configs:
+  # Node.js API Gateway
+  - job_name: 'node-backend'
+    static_configs:
+      - targets: ['node-backend:3000']
+    metrics_path: '/metrics'
+
+  # Python FastAPI Service
+  - job_name: 'python-service'
+    static_configs:
+      - targets: ['python-service:8000']
+    metrics_path: '/metrics'
+
+  # MongoDB
+  - job_name: 'mongodb'
+    static_configs:
+      - targets: ['mongodb:27017']
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Jaeger
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']

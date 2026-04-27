@@ -1,0 +1,181 @@
+/auth/signup:
+  post:
+    summary: User Registration
+    description: Create a new user account and receive authentication tokens
+    tags:
+      - Authentication
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/schemas.yaml#/UserSignupRequest'
+    responses:
+      '201':
+        description: User successfully registered
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                  example: true
+                message:
+                  type: string
+                  example: "User registered successfully"
+                data:
+                  $ref: '../schemas/schemas.yaml#/User'
+                tokens:
+                  $ref: '../schemas/schemas.yaml#/AuthTokens'
+      '400':
+        description: Validation error
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+            example:
+              success: false
+              message: "Validation failed"
+              errors:
+                - field: email
+                  message: "Valid email is required"
+      '409':
+        description: User already exists
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+            example:
+              success: false
+              message: "User already exists"
+
+/auth/login:
+  post:
+    summary: User Login
+    description: Authenticate user and receive JWT tokens
+    tags:
+      - Authentication
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/schemas.yaml#/UserLoginRequest'
+    responses:
+      '200':
+        description: Successfully logged in
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                message:
+                  type: string
+                data:
+                  $ref: '../schemas/schemas.yaml#/User'
+                tokens:
+                  $ref: '../schemas/schemas.yaml#/AuthTokens'
+      '400':
+        description: Validation error
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+      '401':
+        description: Invalid credentials
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+            example:
+              success: false
+              message: "Invalid email or password"
+
+/auth/logout:
+  post:
+    summary: User Logout
+    description: Log out current user (tracking endpoint)
+    tags:
+      - Authentication
+    security:
+      - BearerAuth: []
+    responses:
+      '200':
+        description: Successfully logged out
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/SuccessResponse'
+      '401':
+        description: Unauthorized
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+
+/auth/refresh:
+  post:
+    summary: Refresh Access Token
+    description: Exchange refresh token for new access token
+    tags:
+      - Authentication
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - refresh_token
+            properties:
+              refresh_token:
+                type: string
+                example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    responses:
+      '200':
+        description: New access token issued
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                tokens:
+                  $ref: '../schemas/schemas.yaml#/AuthTokens'
+      '401':
+        description: Invalid refresh token
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
+
+/auth/me:
+  get:
+    summary: Get Current User
+    description: Retrieve authenticated user's profile information
+    tags:
+      - Authentication
+    security:
+      - BearerAuth: []
+    responses:
+      '200':
+        description: Current user profile
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                data:
+                  $ref: '../schemas/schemas.yaml#/User'
+      '401':
+        description: Unauthorized
+        content:
+          application/json:
+            schema:
+              $ref: '../schemas/schemas.yaml#/ErrorResponse'
