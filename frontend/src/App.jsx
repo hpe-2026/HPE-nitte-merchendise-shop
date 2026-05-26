@@ -55,16 +55,21 @@ function App() {
           const { access_token } = response.data
           const parsed = JSON.parse(atob(access_token.split('.')[1]))
           const roles = parsed.realm_access?.roles || []
+const email = parsed.email || ''
+const isNITTEEmail = email.endsWith('@nmamit.in') ||
+                     email.endsWith('@nitte.edu.in') ||
+                     email.endsWith('@nitte.ac.in')
 
-          const userData = {
-            userId: parsed.sub,
-            email: parsed.email,
-            name: parsed.name || parsed.preferred_username,
-            role: roles.includes('admin') ? 'admin'
-                : roles.includes('staff') ? 'staff'
-                : 'customer',
-            source: 'keycloak'
-          }
+const userData = {
+  userId: parsed.sub,
+  email: parsed.email,
+  name: parsed.name || parsed.preferred_username,
+  role: roles.includes('admin') ? 'admin'
+      : isNITTEEmail ? 'staff'
+      : 'customer',
+  userType: isNITTEEmail ? 'internal' : 'external',
+  source: 'keycloak'
+}
 
           useAuthStore.getState().setUser(userData)
           useAuthStore.getState().setToken(access_token)
