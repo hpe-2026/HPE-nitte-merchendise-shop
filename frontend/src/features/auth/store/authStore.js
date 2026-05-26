@@ -109,6 +109,44 @@ export const useAuthStore = create(
         })
       },
 
+      loginWithKeycloak: async (keycloakInstance) => {
+        try {
+          const userData = {
+            userId: keycloakInstance.tokenParsed?.sub,
+            email: keycloakInstance.tokenParsed?.email,
+            name: keycloakInstance.tokenParsed?.name,
+            role: keycloakInstance.tokenParsed?.realm_access?.roles?.includes('admin') ? 'admin'
+                : keycloakInstance.tokenParsed?.realm_access?.roles?.includes('staff') ? 'staff'
+                : 'customer',
+            source: 'keycloak'
+          }
+
+          set({
+            user: userData,
+            token: keycloakInstance.token,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null
+          })
+
+          return { success: true, user: userData }
+        } catch (err) {
+          set({ error: 'Keycloak login failed', isLoading: false })
+          return { success: false, error: 'Keycloak login failed' }
+        }
+      },
+
+      logoutKeycloak: (keycloakInstance) => {
+        set({
+          user: null,
+          token: null,
+          refreshToken: null,
+          isAuthenticated: false,
+          error: null
+        })
+        keycloakInstance.logout({ redirectUri: 'http://localhost:5173' })
+      },
+
       refreshAccessToken: async () => {
         const { refreshToken } = get()
         if (!refreshToken) {
@@ -129,7 +167,6 @@ export const useAuthStore = create(
         }
       },
 
-      // For testing: restore from localStorage on init
       restoreSession: async () => {
         const token = localStorage.getItem('token')
         const userData = localStorage.getItem('user')
@@ -153,7 +190,6 @@ export const useAuthStore = create(
     }),
     {
       name: 'auth-store',
-      // Optional: customize which fields to persist
       partialize: (state) => ({
         user: state.user,
         token: state.token,

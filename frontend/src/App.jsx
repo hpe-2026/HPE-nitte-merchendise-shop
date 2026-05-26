@@ -29,12 +29,60 @@ function App() {
   const { fetchProducts } = useProductStore()
   const { fetchOrders } = useOrderStore()
 
-  // Initialize auth session from localStorage
+  // Handle Keycloak OAuth callback + restore session
   useEffect(() => {
     const initSession = async () => {
-      await restoreSession()
+      // Check if Keycloak redirected back with a code
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+
+      if (code) {
+        try {
+          const body = new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: 'nitte-shop-app',
+            client_secret: 'h6VW71R0dvrzFBk3GOZqRuWSqC7A3h7S',
+            code: code,
+            redirect_uri: 'http://localhost:5173'
+          })
+
+          const response = await axios.post(
+            'http://localhost:8081/realms/nitte-shop/protocol/openid-connect/token',
+            body,
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+          )
+
+          const { access_token } = response.data
+          const parsed = JSON.parse(atob(access_token.split('.')[1]))
+          const roles = parsed.realm_access?.roles || []
+
+          const userData = {
+            userId: parsed.sub,
+            email: parsed.email,
+            name: parsed.name || parsed.preferred_username,
+            role: roles.includes('admin') ? 'admin'
+                : roles.includes('staff') ? 'staff'
+                : 'customer',
+            source: 'keycloak'
+          }
+
+          useAuthStore.getState().setUser(userData)
+          useAuthStore.getState().setToken(access_token)
+          useAuthStore.setState({ isAuthenticated: true })
+
+          // Clean the URL
+          window.history.replaceState({}, document.title, '/')
+        } catch (err) {
+          console.error('Keycloak token exchange failed:', err)
+        }
+      } else {
+        // No Keycloak code, restore normal session
+        await restoreSession()
+      }
+
       setInitialized(true)
     }
+
     initSession()
   }, [restoreSession])
 
@@ -87,8 +135,9 @@ function App() {
     zustandLogout()
     clearCart()
     setCurrentPage('products')
+    // Also clear Keycloak session
+    window.location.href = 'http://localhost:8081/realms/nitte-shop/protocol/openid-connect/logout?post_logout_redirect_uri=http://localhost:5173&client_id=nitte-shop-app'
   }
-
   const handleSignupSuccess = () => {
     setCurrentPage('products')
   }

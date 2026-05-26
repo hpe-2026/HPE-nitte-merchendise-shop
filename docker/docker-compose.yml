@@ -172,11 +172,35 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    container_name: nitte-keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin123
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_PORT: 8081
+    command: start-dev
+    ports:
+      - "8081:8081"
+    networks:
+      - nitte-network
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 volumes:
   mongodb_data:
     driver: local
   mongodb_config:
+    driver: local
+  keycloak_data:
     driver: local
 
 networks:
