@@ -9,7 +9,7 @@ import { useProductStore } from './features/products/store/productStore'
 import { useOrderStore } from './features/orders/store/orderStore'
 import { useFlags } from 'launchdarkly-react-client-sdk'
 import { useFlag } from '@unleash/proxy-client-react'
-
+import { useBooleanFlagValue } from '@openfeature/react-sdk'
 // Components (existing + new)
 import ProductList from './components/ProductList'
 import Cart from './components/Cart'
@@ -33,6 +33,8 @@ function App() {
   const { showAddToCart, showOrdersPage } = useFlags()
   const unleashAddToCart = useFlag('show-add-to-cart')
 const unleashOrdersPage = useFlag('show-orders-page')
+const ofAddToCart = useBooleanFlagValue('show-add-to-cart', false)
+const ofOrdersPage = useBooleanFlagValue('show-orders-page', false)
 
   // Handle Keycloak OAuth callback + restore session
   useEffect(() => {

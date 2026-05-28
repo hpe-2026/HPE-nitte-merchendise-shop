@@ -1,7 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { asyncWithLDProvider } from 'launchdarkly-react-client-sdk'
-import { FlagProvider } from '@unleash/proxy-client-react'
+import { FlagProvider, UnleashClient } from '@unleash/proxy-client-react'
+import { OpenFeatureProvider } from '@openfeature/react-sdk'
+import { setupOpenFeature } from './openfeature.js'
 import './index.css'
 import App from './App.jsx'
 
@@ -11,6 +13,19 @@ const unleashConfig = {
   refreshInterval: 15,
   appName: 'nitte-merch-shop',
 }
+
+// Create Unleash client and expose flags globally for OpenFeature provider
+const unleashClient = new UnleashClient(unleashConfig)
+unleashClient.on('ready', () => {
+  window.__unleashFlags = {
+    'show-add-to-cart': unleashClient.isEnabled('show-add-to-cart'),
+    'show-orders-page': unleashClient.isEnabled('show-orders-page'),
+  }
+})
+unleashClient.start()
+
+// Setup OpenFeature with Unleash as the provider
+setupOpenFeature()
 
 const ldContext = {
   kind: 'user',
@@ -28,8 +43,10 @@ const ldContext = {
   createRoot(document.getElementById('root')).render(
     <StrictMode>
       <LDProvider>
-        <FlagProvider config={unleashConfig}>
-          <App />
+        <FlagProvider unleashClient={unleashClient}>
+          <OpenFeatureProvider>
+            <App />
+          </OpenFeatureProvider>
         </FlagProvider>
       </LDProvider>
     </StrictMode>
