@@ -138,14 +138,16 @@ export default function ProductList({ onAddToCart }) {
                 </p>
               )}
 
-              <button
-                onClick={() => onAddToCart(product)}
-                disabled={product.stock <= 0}
-                className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 font-semibold"
-              >
-                <ShoppingCart className="w-5 h-5" />
-                Add to Cart
-              </button>
+              {onAddToCart && (
+  <button
+    onClick={() => onAddToCart(product)}
+    disabled={product.stock <= 0}
+    className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 font-semibold"
+  >
+    <ShoppingCart className="w-5 h-5" />
+    Add to Cart
+  </button>
+)}
             </div>
           </div>
         ))}

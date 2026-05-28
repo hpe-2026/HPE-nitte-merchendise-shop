@@ -7,6 +7,7 @@ import { useAuthStore } from './features/auth/store/authStore'
 import { useCartStore } from './features/cart/store/cartStore'
 import { useProductStore } from './features/products/store/productStore'
 import { useOrderStore } from './features/orders/store/orderStore'
+import { useFlags } from 'launchdarkly-react-client-sdk'
 
 // Components (existing + new)
 import ProductList from './components/ProductList'
@@ -28,6 +29,7 @@ function App() {
   const { items: cartItems, addItem: addToCart, removeItem: removeFromCart, updateQuantity: updateCartQuantity, clearCart } = useCartStore()
   const { fetchProducts } = useProductStore()
   const { fetchOrders } = useOrderStore()
+  const { showAddToCart, showOrdersPage } = useFlags()
 
   // Handle Keycloak OAuth callback + restore session
   useEffect(() => {
@@ -213,8 +215,8 @@ const userData = {
                 )}
 
                 {currentPage === 'products' && (
-                  <ProductList onAddToCart={addToCart} />
-                )}
+  <ProductList onAddToCart={showAddToCart !== false ? addToCart : null} />
+)}
 
                 {currentPage === 'cart' && (
                   <Cart 
@@ -225,9 +227,9 @@ const userData = {
                   />
                 )}
 
-                {currentPage === 'orders' && (
-                  <Orders />
-                )}
+                {currentPage === 'orders' && showOrdersPage !== false && (
+  <Orders />
+)}
 
                 {currentPage === 'profile' && (
                   <Profile user={user} onLogout={handleLogout} />
@@ -276,7 +278,7 @@ const userData = {
                   </div>
                 )}
 
-                <ProductList onAddToCart={handleAddToCart} />
+                <ProductList onAddToCart={showAddToCart !== false ? handleAddToCart : null} />
               </main>
 
               {/* Footer */}
