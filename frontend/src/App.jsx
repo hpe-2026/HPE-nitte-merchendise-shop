@@ -68,7 +68,11 @@ const userData = {
       : isNITTEEmail ? 'staff'
       : 'customer',
   userType: isNITTEEmail ? 'internal' : 'external',
-  source: 'keycloak'
+  source: 'keycloak',
+  tokenExpiry: parsed.exp * 1000,
+  privileges: isNITTEEmail
+    ? ['view_products', 'place_orders', 'manage_products', 'view_all_orders']
+    : ['view_products', 'place_orders']
 }
 
           useAuthStore.getState().setUser(userData)
@@ -135,12 +139,34 @@ const userData = {
     return () => clearInterval(healthInterval)
   }, [])
 
+  // Auto-logout when token expires
+  useEffect(() => {
+    if (!isAuthenticated) return
+    const user = useAuthStore.getState().user
+    if (!user?.tokenExpiry) return
+
+    const timeLeft = user.tokenExpiry - Date.now()
+    if (timeLeft <= 0) {
+      handleLogout()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      alert('Your session has expired. Please login again.')
+      handleLogout()
+    }, timeLeft)
+
+    return () => clearTimeout(timer)
+  }, [isAuthenticated])
+
   // Handle logout using Zustand
   const handleLogout = () => {
     zustandLogout()
     clearCart()
     setCurrentPage('products')
-    // Also clear Keycloak session
+    localStorage.removeItem('auth-store')
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
     window.location.href = 'http://localhost:8081/realms/nitte-shop/protocol/openid-connect/logout?post_logout_redirect_uri=http://localhost:5173&client_id=nitte-shop-app'
   }
   const handleSignupSuccess = () => {
