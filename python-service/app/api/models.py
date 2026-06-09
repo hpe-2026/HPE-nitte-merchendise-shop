@@ -6,13 +6,13 @@ from bson import ObjectId
 class Product(BaseModel):
     id: str = Field(alias="_id")
     name: str = Field(..., min_length=1, max_length=255)
-    description: str = Field(..., min_length=1)
+    description: Optional[str] = None
     category: str = Field(..., min_length=1, max_length=100)
     price: float = Field(..., gt=0)
     stock: int = Field(..., ge=0)
     image_url: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         populate_by_name = True

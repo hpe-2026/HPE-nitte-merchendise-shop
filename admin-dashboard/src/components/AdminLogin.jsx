@@ -2,23 +2,16 @@ import { useState } from 'react'
 import axios from 'axios'
 import './AdminLogin.css'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+
 function AdminLogin({ onLoginSuccess }) {
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [formData, setFormData] = useState({
-    email: '',
-    password: ''
-  })
-
-  const ADMIN_EMAIL = 'admin@nitte.com'
-  const ADMIN_PASSWORD = 'Admin@123'
+  const [error, setError]     = useState('')
+  const [formData, setFormData] = useState({ email: '', password: '' })
 
   const handleChange = (e) => {
     const { name, value } = e.target
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }))
+    setFormData(prev => ({ ...prev, [name]: value }))
     setError('')
   }
 
@@ -26,30 +19,16 @@ function AdminLogin({ onLoginSuccess }) {
     e.preventDefault()
     setLoading(true)
     setError('')
-
     try {
-      // Validate credentials (hardcoded for demo purposes)
-      if (formData.email !== ADMIN_EMAIL || formData.password !== ADMIN_PASSWORD) {
-        setError('Invalid admin credentials. Please try again.')
-        setLoading(false)
-        return
-      }
-
-      // Generate demo admin token that backend will recognize
-      const token = 'admin-token-' + btoa(ADMIN_EMAIL + ':' + Date.now())
-      const userData = {
-        userId: 'admin-user',
-        email: ADMIN_EMAIL,
-        name: 'Administrator',
-        isAdmin: true
-      }
-
-      localStorage.setItem('token', token)
-      localStorage.setItem('user', JSON.stringify(userData))
-      
-      onLoginSuccess(userData)
+      const response = await axios.post(API_URL + '/api/v1/auth/admin/login', { email: formData.email, password: formData.password })
+      const { tokens, data } = response.data
+      if (!tokens?.access_token) throw new Error('No token received')
+      localStorage.setItem('token', tokens.access_token)
+      localStorage.setItem('refresh_token', tokens.refresh_token)
+      localStorage.setItem('user', JSON.stringify(data))
+      onLoginSuccess(data)
     } catch (err) {
-      setError('Admin login failed. Please try again.')
+      setError(err.response?.data?.message || 'Admin login failed.')
     } finally {
       setLoading(false)
     }
@@ -62,55 +41,21 @@ function AdminLogin({ onLoginSuccess }) {
           <h1>Admin Dashboard</h1>
           <p>NITTE Merchandise Shop Management</p>
         </div>
-        
         <form onSubmit={handleSubmit} className="admin-login-form">
           <div className="form-group">
             <label htmlFor="email">Admin Email</label>
-            <input
-              type="email"
-              id="email"
-              name="email"
-              value={formData.email}
-              onChange={handleChange}
-              placeholder="Enter admin email"
-              required
-              disabled={loading}
-            />
+            <input type="email" id="email" name="email" value={formData.email} onChange={handleChange} placeholder="Enter admin email" required disabled={loading} autoComplete="username" />
           </div>
-
           <div className="form-group">
             <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              value={formData.password}
-              onChange={handleChange}
-              placeholder="Enter admin password"
-              required
-              disabled={loading}
-            />
+            <input type="password" id="password" name="password" value={formData.password} onChange={handleChange} placeholder="Enter admin password" required disabled={loading} autoComplete="current-password" />
           </div>
-
           {error && <div className="error-message">{error}</div>}
-
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="admin-login-button"
-          >
+          <button type="submit" disabled={loading} className="admin-login-button">
             {loading ? 'Logging In...' : 'Login to Admin Panel'}
           </button>
         </form>
-
-        <div className="admin-credentials">
-          <p>Use your admin credentials to access the dashboard</p>
-          <div className="demo-info">
-            <strong>Demo Access:</strong><br/>
-            Email: admin@nitte.com<br/>
-            Password: Admin@123
-          </div>
-        </div>
+        <p style={{ textAlign: 'center', fontSize: 12, color: '#999', marginTop: 16 }}>Restricted to admin accounts only.</p>
       </div>
     </div>
   )

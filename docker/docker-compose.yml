@@ -1,7 +1,6 @@
 version: '3.9'
 
 services:
-  # Jaeger - Distributed Tracing (v2.16.0 - latest based on OpenTelemetry Collector)
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
     container_name: nitte-jaeger
@@ -28,7 +27,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # MongoDB Database
   mongodb:
     image: mongo:7.0
     container_name: nitte-mongodb
@@ -50,7 +48,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # Python FastAPI Service
   python-service:
     build:
       context: ../python-service
@@ -81,7 +78,6 @@ services:
       retries: 3
       start_period: 5s
 
-  # Node.js API Gateway
   node-backend:
     build:
       context: ../node-backend
@@ -117,7 +113,6 @@ services:
       retries: 3
       start_period: 5s
 
-  # React Frontend - User Application
   frontend:
     build:
       context: ../frontend
@@ -141,7 +136,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # React Admin Dashboard
   admin-dashboard:
     build:
       context: ../admin-dashboard
@@ -168,7 +162,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # Keycloak
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.1
     container_name: nitte-keycloak
@@ -193,7 +186,6 @@ services:
       retries: 5
       start_period: 60s
 
-  # Unleash DB - Feature Flag Database
   unleash-db:
     image: postgres:15
     container_name: nitte-unleash-db
@@ -211,7 +203,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Unleash - Feature Flag Service
   unleash:
     image: unleashorg/unleash-server:latest
     container_name: nitte-unleash
@@ -233,6 +224,67 @@ services:
       retries: 5
       start_period: 30s
 
+  flagsmith:
+    image: flagsmith/flagsmith:latest
+    container_name: nitte-flagsmith
+    environment:
+      DJANGO_ALLOWED_HOSTS: "*"
+      DATABASE_URL: postgresql://flagsmith:flagsmith123@flagsmith-db:5432/flagsmith
+    ports:
+      - "8100:8000"
+    depends_on:
+      flagsmith-db:
+        condition: service_healthy
+    networks:
+      - nitte-network
+
+  flagsmith-db:
+    image: postgres:15
+    container_name: nitte-flagsmith-db
+    environment:
+      POSTGRES_USER: flagsmith
+      POSTGRES_PASSWORD: flagsmith123
+      POSTGRES_DB: flagsmith
+    networks:
+      - nitte-network
+    volumes:
+      - flagsmith_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flagsmith"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: nitte-loki
+    ports:
+      - "3100:3100"
+    networks:
+      - nitte-network
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: nitte-promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - nitte-network
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nitte-grafana
+    ports:
+      - "3001:3000"
+    networks:
+      - nitte-network
+    depends_on:
+      - loki
+
 volumes:
   mongodb_data:
     driver: local
@@ -241,6 +293,10 @@ volumes:
   keycloak_data:
     driver: local
   unleash_db_data:
+    driver: local
+  flagsmith_db_data:
+    driver: local
+  loki_data:
     driver: local
 
 networks:

@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ShoppingCart, Home, Package, LogOut } from 'lucide-react'
 import axios from 'axios'
-
-// Zustand stores
 import { useAuthStore } from './features/auth/store/authStore'
 import { useCartStore } from './features/cart/store/cartStore'
 import { useProductStore } from './features/products/store/productStore'
 import { useOrderStore } from './features/orders/store/orderStore'
-import { useFlags } from 'launchdarkly-react-client-sdk'
 import { useFlag } from '@unleash/proxy-client-react'
 import { useBooleanFlagValue } from '@openfeature/react-sdk'
-// Components (existing + new)
+import flagsmith from './flagsmith.js'
 import ProductList from './components/ProductList'
 import Cart from './components/Cart'
 import Orders from './components/Orders'
@@ -25,148 +21,107 @@ function App() {
   const [apiStatus, setApiStatus] = useState('checking')
   const [initialized, setInitialized] = useState(false)
 
-  // Use Zustand stores instead of local state
   const { user, isAuthenticated, restoreSession, logout: zustandLogout } = useAuthStore()
   const { items: cartItems, addItem: addToCart, removeItem: removeFromCart, updateQuantity: updateCartQuantity, clearCart } = useCartStore()
   const { fetchProducts } = useProductStore()
   const { fetchOrders } = useOrderStore()
-  const { showAddToCart, showOrdersPage } = useFlags()
-  const unleashAddToCart = useFlag('show-add-to-cart')
-const unleashOrdersPage = useFlag('show-orders-page')
-const ofAddToCart = useBooleanFlagValue('show-add-to-cart', false)
-const ofOrdersPage = useBooleanFlagValue('show-orders-page', false)
 
-  // Handle Keycloak OAuth callback + restore session
+  const unleashAddToCart = useFlag('show-add-to-cart')
+  const unleashOrdersPage = useFlag('show-orders-page')
+  const ofAddToCart = useBooleanFlagValue('show-add-to-cart', false)
+  const ofOrdersPage = useBooleanFlagValue('show-orders-page', false)
+  const fsAddToCart = flagsmith.hasFeature('show-add-to-cart')
+  const fsOrdersPage = flagsmith.hasFeature('show-orders-page')
+
+  const showAddToCart = unleashAddToCart || ofAddToCart || fsAddToCart
+  const showOrdersPage = unleashOrdersPage || ofOrdersPage || fsOrdersPage
+
   useEffect(() => {
     const initSession = async () => {
-      // Check if Keycloak redirected back with a code
       const params = new URLSearchParams(window.location.search)
       const code = params.get('code')
-
       if (code) {
         try {
           const body = new URLSearchParams({
             grant_type: 'authorization_code',
             client_id: 'nitte-shop-app',
-            client_secret: 'h6VW71R0dvrzFBk3GOZqRuWSqC7A3h7S',
+            client_secret: 'vrQhCb3rZAiGB4devhqC28Y0IbDmdtnr',
             code: code,
             redirect_uri: 'http://localhost:5173'
           })
-
           const response = await axios.post(
-            'http://localhost:8081/realms/nitte-shop/protocol/openid-connect/token',
+            'http://localhost:8081/realms/nitte-shop-app/protocol/openid-connect/token',
             body,
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
           )
-
           const { access_token } = response.data
           const parsed = JSON.parse(atob(access_token.split('.')[1]))
           const roles = parsed.realm_access?.roles || []
-const email = parsed.email || ''
-const isNITTEEmail = email.endsWith('@nmamit.in') ||
-                     email.endsWith('@nitte.edu.in') ||
-                     email.endsWith('@nitte.ac.in')
-
-const userData = {
-  userId: parsed.sub,
-  email: parsed.email,
-  name: parsed.name || parsed.preferred_username,
-  role: roles.includes('admin') ? 'admin'
-      : isNITTEEmail ? 'staff'
-      : 'customer',
-  userType: isNITTEEmail ? 'internal' : 'external',
-  source: 'keycloak',
-  tokenExpiry: parsed.exp * 1000,
-  privileges: isNITTEEmail
-    ? ['view_products', 'place_orders', 'manage_products', 'view_all_orders']
-    : ['view_products', 'place_orders']
-}
-
+          const email = parsed.email || ''
+          const isNITTEEmail = email.endsWith('@nmamit.in') || email.endsWith('@nitte.edu.in') || email.endsWith('@nitte.ac.in')
+          const userData = {
+            userId: parsed.sub,
+            email: parsed.email,
+            name: parsed.name || parsed.preferred_username,
+            role: roles.includes('admin') ? 'admin' : isNITTEEmail ? 'staff' : 'customer',
+            userType: isNITTEEmail ? 'internal' : 'external',
+            source: 'keycloak',
+            tokenExpiry: parsed.exp * 1000,
+            privileges: isNITTEEmail
+              ? ['view_products', 'place_orders', 'manage_products', 'view_all_orders']
+              : ['view_products', 'place_orders']
+          }
           useAuthStore.getState().setUser(userData)
           useAuthStore.getState().setToken(access_token)
           useAuthStore.setState({ isAuthenticated: true })
-
-          // Clean the URL
           window.history.replaceState({}, document.title, '/')
         } catch (err) {
           console.error('Keycloak token exchange failed:', err)
         }
       } else {
-        // No Keycloak code, restore normal session
         await restoreSession()
       }
-
       setInitialized(true)
     }
-
     initSession()
   }, [restoreSession])
 
-  // Fetch products on mount
-  useEffect(() => {
-    fetchProducts()
-  }, [fetchProducts])
+  useEffect(() => { fetchProducts() }, [fetchProducts])
 
-  // Fetch user orders when authenticated
   useEffect(() => {
     if (isAuthenticated) {
       const token = useAuthStore.getState().token
-      if (token) {
-        fetchOrders(token)
-      }
+      if (token) fetchOrders(token)
     }
   }, [isAuthenticated, fetchOrders])
 
-  // Check API health with retry logic
   useEffect(() => {
     const checkHealth = async () => {
       for (let i = 0; i < 3; i++) {
         try {
-          const response = await axios.get('http://localhost:3000/api/v1/health', {
-            timeout: 5000
-          })
-          if (response.status === 200) {
-            setApiStatus('online')
-            return
-          }
+          const response = await axios.get('http://localhost:3000/api/v1/health', { timeout: 5000 })
+          if (response.status === 200) { setApiStatus('online'); return }
         } catch (error) {
-          if (i < 2) {
-            await new Promise(resolve => setTimeout(resolve, 1000))
-          } else {
-            setApiStatus('offline')
-          }
+          if (i < 2) await new Promise(resolve => setTimeout(resolve, 1000))
+          else setApiStatus('offline')
         }
       }
     }
-    
     checkHealth()
-    
-    // Re-check health every 30 seconds
     const healthInterval = setInterval(checkHealth, 30000)
     return () => clearInterval(healthInterval)
   }, [])
 
-  // Auto-logout when token expires
   useEffect(() => {
     if (!isAuthenticated) return
-    const user = useAuthStore.getState().user
-    if (!user?.tokenExpiry) return
-
-    const timeLeft = user.tokenExpiry - Date.now()
-    if (timeLeft <= 0) {
-      handleLogout()
-      return
-    }
-
-    const timer = setTimeout(() => {
-      alert('Your session has expired. Please login again.')
-      handleLogout()
-    }, timeLeft)
-
+    const u = useAuthStore.getState().user
+    if (!u?.tokenExpiry) return
+    const timeLeft = u.tokenExpiry - Date.now()
+    if (timeLeft <= 0) { handleLogout(); return }
+    const timer = setTimeout(() => { alert('Session expired. Please login again.'); handleLogout() }, timeLeft)
     return () => clearTimeout(timer)
   }, [isAuthenticated])
 
-  // Handle logout using Zustand
   const handleLogout = () => {
     zustandLogout()
     clearCart()
@@ -174,19 +129,13 @@ const userData = {
     localStorage.removeItem('auth-store')
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    window.location.href = 'http://localhost:8081/realms/nitte-shop/protocol/openid-connect/logout?post_logout_redirect_uri=http://localhost:5173&client_id=nitte-shop-app'
-  }
-  const handleSignupSuccess = () => {
-    setCurrentPage('products')
+    window.location.href = 'http://localhost:8081/realms/nitte-shop-app/protocol/openid-connect/logout?post_logout_redirect_uri=http://localhost:5173&client_id=nitte-shop-app'
   }
 
+  const handleSignupSuccess = () => setCurrentPage('products')
   const handleAddToCart = (product) => {
-    if (!isAuthenticated) {
-      // Redirect to login if not authenticated
-      setCurrentPage('login')
-    } else {
-      addToCart(product)
-    }
+    if (!isAuthenticated) setCurrentPage('login')
+    else addToCart(product)
   }
 
   return (
@@ -202,7 +151,7 @@ const userData = {
         <>
           {isAuthenticated ? (
             <>
-              <Navbar 
+              <Navbar
                 cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)}
                 currentPage={currentPage}
                 setCurrentPage={setCurrentPage}
@@ -210,46 +159,32 @@ const userData = {
                 user={user}
                 onLogout={handleLogout}
               />
-
               <main className="container py-8">
-                {/* API Status Alert */}
                 {apiStatus === 'offline' && (
                   <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
-                    [WARNING] API Server is offline. Please ensure the backend is running on port 3000.
+                    API Server is offline. Please ensure the backend is running on port 3000.
                   </div>
                 )}
-
                 {currentPage === 'products' && (
-  <ProductList onAddToCart={(showAddToCart !== false && unleashAddToCart) ? addToCart : null} />
-)}
-
+                  <ProductList onAddToCart={showAddToCart ? addToCart : null} />
+                )}
                 {currentPage === 'cart' && (
-                  <Cart 
+                  <Cart
                     cartItems={cartItems}
                     onRemove={removeFromCart}
                     onUpdateQuantity={updateCartQuantity}
                     setCurrentPage={setCurrentPage}
                   />
                 )}
-
-                {currentPage === 'orders' && showOrdersPage !== false && unleashOrdersPage && (
-  <Orders />
-)}
-
-                {currentPage === 'profile' && (
-                  <Profile user={user} onLogout={handleLogout} />
-                )}
+                {currentPage === 'orders' && showOrdersPage && <Orders />}
+                {currentPage === 'profile' && <Profile user={user} onLogout={handleLogout} />}
               </main>
-
-              {/* Footer */}
               <footer className="bg-gray-800 text-white py-8 mt-16">
                 <div className="container text-center">
-                  <p className="text-gray-400">
-                    NITTE Merchandise Shop • Powered by React + Node.js + Python + MongoDB
-                  </p>
+                  <p className="text-gray-400">NITTE Merchandise Shop - Powered by React + Node.js + Python + MongoDB</p>
                   <p className="text-gray-500 text-sm mt-2">
-                    [API Status] <span className={apiStatus === 'online' ? 'text-green-400' : 'text-red-400'}>
-                      {apiStatus === 'online' ? 'Online [OK]' : 'Offline [OFFLINE]'}
+                    API Status: <span className={apiStatus === 'online' ? 'text-green-400' : 'text-red-400'}>
+                      {apiStatus === 'online' ? 'Online' : 'Offline'}
                     </span>
                   </p>
                 </div>
@@ -259,7 +194,6 @@ const userData = {
             <AuthPage onAuthSuccess={handleSignupSuccess} />
           ) : (
             <>
-              {/* Guest Navbar - Minimal */}
               <nav className="bg-white shadow-md sticky top-0 z-50">
                 <div className="container mx-auto px-4 py-4 flex justify-between items-center">
                   <div className="flex items-center gap-3">
@@ -274,27 +208,20 @@ const userData = {
                   </button>
                 </div>
               </nav>
-
               <main className="container py-8">
-                {/* API Status Alert */}
                 {apiStatus === 'offline' && (
                   <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
-                    [WARNING] API Server is offline. Please ensure the backend is running on port 3000.
+                    API Server is offline. Please ensure the backend is running on port 3000.
                   </div>
                 )}
-
-                <ProductList onAddToCart={(showAddToCart !== false && unleashAddToCart) ? handleAddToCart : null} />
+                <ProductList onAddToCart={showAddToCart ? handleAddToCart : null} />
               </main>
-
-              {/* Footer */}
               <footer className="bg-gray-800 text-white py-8 mt-16">
                 <div className="container text-center">
-                  <p className="text-gray-400">
-                    NITTE Merchandise Shop • Powered by React + Node.js + Python + MongoDB
-                  </p>
+                  <p className="text-gray-400">NITTE Merchandise Shop - Powered by React + Node.js + Python + MongoDB</p>
                   <p className="text-gray-500 text-sm mt-2">
-                    [API Status] <span className={apiStatus === 'online' ? 'text-green-400' : 'text-red-400'}>
-                      {apiStatus === 'online' ? 'Online [OK]' : 'Offline [OFFLINE]'}
+                    API Status: <span className={apiStatus === 'online' ? 'text-green-400' : 'text-red-400'}>
+                      {apiStatus === 'online' ? 'Online' : 'Offline'}
                     </span>
                   </p>
                 </div>

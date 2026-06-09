@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { BarChart3, Activity, Zap, SettingsIcon } from 'lucide-react'
 import axios from 'axios'
 import AdminNavbar from './components/AdminNavbar'
 import AdminLogin from './components/AdminLogin'
@@ -9,121 +8,63 @@ import Traces from './components/Traces'
 import Users from './components/Users'
 import Products from './components/Products'
 import Orders from './components/Orders'
+import Registrations from './components/Registrations'
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard')
-  const [stats, setStats] = useState({
-    totalProducts: 0,
-    totalOrders: 0,
-    totalRevenue: 0,
-    activeUsers: 0
-  })
-  const [user, setUser] = useState(null)
+  const [user, setUser]               = useState(null)
+  const [stats, setStats]             = useState({ totalProducts:0, totalOrders:0, totalRevenue:0, activeUsers:0 })
 
   useEffect(() => {
-    // Check if user is already logged in
     const token = localStorage.getItem('token')
     const userData = localStorage.getItem('user')
-    if (token && userData) {
-      setUser(JSON.parse(userData))
-    }
+    if (token && userData) { try { setUser(JSON.parse(userData)) } catch (_) {} }
   }, [])
 
-  const handleLoginSuccess = (userData) => {
-    setUser(userData)
-    setCurrentPage('dashboard')
-  }
+  const handleLoginSuccess = (userData) => { setUser(userData); setCurrentPage('dashboard') }
 
   const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setUser(null)
-    setCurrentPage('dashboard')
+    localStorage.removeItem('token'); localStorage.removeItem('refresh_token'); localStorage.removeItem('user')
+    setUser(null); setCurrentPage('dashboard')
   }
 
   useEffect(() => {
-    if (user) {
-      fetchStats()
-      const interval = setInterval(fetchStats, 10000) // Refresh every 10 seconds
-      return () => clearInterval(interval)
-    }
+    if (!user) return
+    fetchStats()
+    const id = setInterval(fetchStats, 30_000)
+    return () => clearInterval(id)
   }, [user])
 
   const fetchStats = async () => {
     try {
-      const token = localStorage.getItem('token')
-      
-      // Fetch products count
-      const productsResponse = await axios.get('http://localhost:3000/api/v1/products', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const products = productsResponse.data.data || []
-      const totalProducts = products.length
-
-      // Fetch orders
-      const ordersResponse = await axios.get('http://localhost:3000/api/v1/orders', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const orders = ordersResponse.data.data || []
-      const totalOrders = orders.length
-
-      // Calculate total revenue from orders
-      const totalRevenue = orders.reduce((sum, order) => {
-        const orderTotal = order.items.reduce((itemSum, item) => itemSum + (item.price * item.quantity), 0)
-        return sum + orderTotal
-      }, 0)
-
-      // Calculate active users (unique users who have placed orders)
-      const uniqueUsers = new Set(orders.map(order => order.user_id))
-      const activeUsers = uniqueUsers.size
-
-      setStats({
-        totalProducts: totalProducts,
-        totalOrders: totalOrders,
-        totalRevenue: totalRevenue,
-        activeUsers: activeUsers
-      })
-    } catch (err) {
-      console.error('Failed to fetch stats:', err)
-      setStats({
-        totalProducts: 0,
-        totalOrders: 0,
-        totalRevenue: 0,
-        activeUsers: 0
-      })
-    }
+      const h = { Authorization: 'Bearer ' + localStorage.getItem('token') }
+      const [prodRes, ordRes] = await Promise.all([
+        axios.get(API_URL + '/api/v1/products', { headers: h }),
+        axios.get(API_URL + '/api/v1/orders',   { headers: h }),
+      ])
+      const products = prodRes.data.data || []
+      const orders   = ordRes.data.data  || []
+      const revenue  = orders.reduce((s,o) => s + (o.items||[]).reduce((si,i)=>si+i.price*i.quantity,0), 0)
+      setStats({ totalProducts: products.length, totalOrders: orders.length, totalRevenue: revenue, activeUsers: new Set(orders.map(o=>o.user_id)).size })
+    } catch (_) {}
   }
 
   return (
     <div className="min-h-screen bg-gray-100">
-      {!user ? (
-        <AdminLogin onLoginSuccess={handleLoginSuccess} />
-      ) : (
+      {!user ? <AdminLogin onLoginSuccess={handleLoginSuccess} /> : (
         <>
-          <AdminNavbar 
-            currentPage={currentPage}
-            setCurrentPage={setCurrentPage}
-            user={user}
-            onLogout={handleLogout}
-          />
-
+          <AdminNavbar currentPage={currentPage} setCurrentPage={setCurrentPage} user={user} onLogout={handleLogout} />
           <main className="py-8">
-            {currentPage === 'dashboard' && <Dashboard stats={stats} />}
-            {currentPage === 'metrics' && <Metrics />}
-            {currentPage === 'traces' && <Traces />}
-            {currentPage === 'users' && <Users />}
-            {currentPage === 'products' && <Products />}
-            {currentPage === 'orders' && <Orders />}
+            {currentPage==='dashboard'     && <Dashboard stats={stats} />}
+            {currentPage==='registrations' && <Registrations />}
+            {currentPage==='metrics'       && <Metrics />}
+            {currentPage==='traces'        && <Traces />}
+            {currentPage==='users'         && <Users />}
+            {currentPage==='products'      && <Products />}
+            {currentPage==='orders'        && <Orders />}
           </main>
-
-          {/* Footer */}
-          <footer className="bg-gray-800 text-white py-6 mt-12">
-            <div className="container mx-auto px-4 text-center">
-              <p className="text-gray-400">
-                NITTE Admin Dashboard • Prometheus Metrics • Jaeger Tracing • Jenkins CI/CD
-              </p>
-            </div>
-          </footer>
         </>
       )}
     </div>
